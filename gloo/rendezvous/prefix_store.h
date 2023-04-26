@@ -34,6 +34,9 @@ class PrefixStore : public Store {
       const std::vector<std::string>& keys,
       const std::chrono::milliseconds& timeout) override;
 
+  virtual void append(const std::string& key, const std::vector<char>& data) override;
+  virtual bool has_append() override;
+
  protected:
   const std::string prefix_;
   Store& store_;

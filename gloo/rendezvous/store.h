@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "gloo/common/logging.h"
+#include "gloo/common/error.h"
 
 namespace gloo {
 namespace rendezvous {
@@ -37,6 +38,14 @@ class Store {
     // Base implementation ignores the timeout for backward compatibility.
     // Derived Store implementations should override this function.
     wait(keys);
+  }
+
+  virtual void append(const std::string& key, const std::vector<char>& data) {
+    GLOO_THROW_INVALID_OPERATION_EXCEPTION("this store doesn't support append");
+  }
+
+  virtual bool has_append() {
+    return false;
   }
 
 };

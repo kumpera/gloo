@@ -43,5 +43,17 @@ void PrefixStore::wait(
   store_.wait(joinedKeys, timeout);
 }
 
+void PrefixStore::append(const std::string& key, const std::vector<char>& data) {
+  if (!store_.has_append()) {
+    GLOO_THROW_INVALID_OPERATION_EXCEPTION("underlying store doesn't support append");
+  }
+  store_.append(joinKey(key), data);
+}
+
+bool PrefixStore::has_append() {
+  return store_.has_append();
+}
+
+
 } // namespace rendezvous
 } // namespace gloo
