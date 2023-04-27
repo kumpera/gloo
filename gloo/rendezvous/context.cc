@@ -40,23 +40,57 @@ std::vector<char> Context::extractAddress(
                            allAddrs.begin() + (adjRank + 1) * addrSize);
 }
 
-void Context::connectFullMesh(
-    rendezvous::Store& store,
-    std::shared_ptr<transport::Device>& dev) {
-  std::vector<char> allBytes;
-  int localRank = 0;
 
-  // Get Hostname using syscall
-  char hostname[HOSTNAME_MAX_SIZE]; // NOLINT
-  int rv = gethostname(hostname, HOSTNAME_MAX_SIZE);
-  if (rv != 0) {
-    throw std::system_error(errno, std::system_category());
+void _store_based_barrier(rendezvous::Store &store, const std::string &barrier_prefix, int rank, int size) {
+  std::string barrier_count_key = barrier_prefix + "/rank_count";
+  std::string barrier_last_rank_key = barrier_prefix + "/last_rank";
+
+  if(store.add(barrier_count_key, 1) == size) {
+    std::vector<char> val = { '1' };
+    store.set(barrier_last_rank_key, val);
   }
 
-  auto localHostName = std::string(hostname);
+  std::vector<std::string> keys = { barrier_last_rank_key };
+
+  while(1) {
+    try {
+      store.wait(keys, std::chrono::milliseconds{10000}); //10sec
+      break;
+    } catch(std::exception &e) {
+    }
+  }
+}
+
+int append_based_find_local_rank(rendezvous::Store &store, int rank, int size, const std::string& localHostName) {
+  int localRank = 0;
+  char* ptr = (char*)&rank;
+  std::vector<char> vals;
+  vals.insert(vals.end(), ptr, ptr + sizeof(int));
+  store.append(localHostName, vals);
+
+  // wait until all ranks are done appending values
+  _store_based_barrier(store, "bootstrap_", rank, size);
+
+  vals = store.get(localHostName);
+  std::vector<int> ranks;
+  for(int i = 0; i < vals.size(); i += sizeof(int)) {
+    ranks.push_back(*(int*)&vals[i]);
+  }
+  std::sort(ranks.begin(), ranks.end());
+  for(int i = 0; i < ranks.size(); ++i) {
+    if (ranks[i] == rank) {
+      localRank = i;
+      break;
+    }
+  }
+  return localRank;
+}
+
+int scan_based_find_local_rank(rendezvous::Store &store, int rank, int size, const std::string& localHostName) {
   // Add global rank <> hostname pair to the Store. This store is then passed
   // to Gloo when connectFullMesh is called, where Gloo uses the global rank <>
   // hostname mapping to compute local ranks.
+  int localRank = 0;
   std::string localKey("rank_" + std::to_string(rank));
   const std::vector<char> value(localHostName.begin(), localHostName.end());
   store.set(localKey, value);
@@ -74,6 +108,32 @@ void Context::connectFullMesh(
       localRank++;
     }
   }
+  return localRank;
+}
+
+int find_local_rank(rendezvous::Store& store, int rank, int size) {
+  int localRank = 0;
+  int v = 0;
+  // Get Hostname using syscall
+  char hostname[HOSTNAME_MAX_SIZE]; // NOLINT
+  int rv = gethostname(hostname, HOSTNAME_MAX_SIZE);
+  if (rv != 0) {
+    throw std::system_error(errno, std::system_category());
+  }
+  auto localHostName = std::string(hostname);
+
+  if(store.has_v2_support() and ::getenv("GLOO_FAST_FIND_LOCAL_RANKq")) {
+    return append_based_find_local_rank(store, rank, size, localHostName);
+  } else {
+    return scan_based_find_local_rank(store, rank, size, localHostName);
+  }
+}
+
+void Context::connectFullMesh(
+    rendezvous::Store& store,
+    std::shared_ptr<transport::Device>& dev) {
+  std::vector<char> allBytes;
+  int localRank = find_local_rank(store, rank, size);
 
   // Create pairs
   auto transportContext = dev->createContext(rank, size);
